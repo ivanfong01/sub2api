@@ -2738,22 +2738,31 @@ func (s *GeminiMessagesCompatService) handleGeminiUpstreamError(ctx context.Cont
 		// 根据账号类型使用不同的默认重置时间
 		var ra time.Time
 		if isCodeAssist {
-			// Code Assist: fallback cooldown by tier
 			cooldown := geminiCooldownForTier(tierID)
 			if s.rateLimitService != nil {
 				cooldown = s.rateLimitService.GeminiCooldown(ctx, account)
 			}
 			ra = time.Now().Add(cooldown)
-			logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini 429] Account %d (Code Assist, tier=%s, project=%s) rate limited, cooldown=%v", account.ID, tierID, projectID, time.Until(ra).Truncate(time.Second))
+			log.Printf("[Gemini 429] Account %d (Code Assist, tier=%s, project=%s) rate limited, cooldown=%v",
+				account.ID, tierID, projectID, time.Until(ra).Truncate(time.Second))
+		} else if oauthType == "google_one" {
+			// Gemini CLI (Google One)：同样使用 tier cooldown，不强制封到 PST 午夜
+			cooldown := 5 * time.Minute
+			if s.rateLimitService != nil {
+				cooldown = s.rateLimitService.GeminiCooldown(ctx, account)
+			}
+			ra = time.Now().Add(cooldown)
+			log.Printf("[Gemini 429] Account %d (Gemini CLI / Google One, tier=%s) rate limited, cooldown=%v",
+				account.ID, tierID, time.Until(ra).Truncate(time.Second))
 		} else {
-			// API Key / AI Studio OAuth: PST 午夜
+			// AI Studio / API Key：保持原有 PST 午夜逻辑（日配额耗尽场景）
 			if ts := nextGeminiDailyResetUnix(); ts != nil {
 				ra = time.Unix(*ts, 0)
-				logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini 429] Account %d (API Key/AI Studio, type=%s) rate limited, reset at PST midnight (%v)", account.ID, account.Type, ra)
+				log.Printf("[Gemini 429] Account %d (API Key/AI Studio, type=%s) rate limited, reset at PST midnight (%v)",
+					account.ID, account.Type, ra)
 			} else {
-				// 兜底：5 分钟
 				ra = time.Now().Add(5 * time.Minute)
-				logger.LegacyPrintf("service.gemini_messages_compat", "[Gemini 429] Account %d rate limited, fallback to 5min", account.ID)
+				log.Printf("[Gemini 429] Account %d rate limited, fallback to 5min", account.ID)
 			}
 		}
 		_ = s.accountRepo.SetRateLimited(ctx, account.ID, ra)
