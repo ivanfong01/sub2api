@@ -3,6 +3,28 @@ package usagestats
 
 import "time"
 
+const (
+	ModelSourceRequested = "requested"
+	ModelSourceUpstream  = "upstream"
+	ModelSourceMapping   = "mapping"
+)
+
+func IsValidModelSource(source string) bool {
+	switch source {
+	case ModelSourceRequested, ModelSourceUpstream, ModelSourceMapping:
+		return true
+	default:
+		return false
+	}
+}
+
+func NormalizeModelSource(source string) string {
+	if IsValidModelSource(source) {
+		return source
+	}
+	return ModelSourceRequested
+}
+
 // DashboardStats 仪表盘统计
 type DashboardStats struct {
 	// 用户统计
@@ -34,8 +56,9 @@ type DashboardStats struct {
 	TotalCacheCreationTokens int64   `json:"total_cache_creation_tokens"`
 	TotalCacheReadTokens     int64   `json:"total_cache_read_tokens"`
 	TotalTokens              int64   `json:"total_tokens"`
-	TotalCost                float64 `json:"total_cost"`        // 累计标准计费
-	TotalActualCost          float64 `json:"total_actual_cost"` // 累计实际扣除
+	TotalCost                float64 `json:"total_cost"`         // 累计标准计费
+	TotalActualCost          float64 `json:"total_actual_cost"`  // 累计实际扣除
+	TotalAccountCost         float64 `json:"total_account_cost"` // 累计账号成本
 
 	// 今日 Token 使用统计
 	TodayRequests            int64   `json:"today_requests"`
@@ -44,8 +67,9 @@ type DashboardStats struct {
 	TodayCacheCreationTokens int64   `json:"today_cache_creation_tokens"`
 	TodayCacheReadTokens     int64   `json:"today_cache_read_tokens"`
 	TodayTokens              int64   `json:"today_tokens"`
-	TodayCost                float64 `json:"today_cost"`        // 今日标准计费
-	TodayActualCost          float64 `json:"today_actual_cost"` // 今日实际扣除
+	TodayCost                float64 `json:"today_cost"`         // 今日标准计费
+	TodayActualCost          float64 `json:"today_actual_cost"`  // 今日实际扣除
+	TodayAccountCost         float64 `json:"today_account_cost"` // 今日账号成本
 
 	// 系统运行统计
 	AverageDurationMs float64 `json:"average_duration_ms"` // 平均响应时间
@@ -77,8 +101,9 @@ type ModelStat struct {
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalTokens         int64   `json:"total_tokens"`
-	Cost                float64 `json:"cost"`        // 标准计费
-	ActualCost          float64 `json:"actual_cost"` // 实际扣除
+	Cost                float64 `json:"cost"`         // 标准计费
+	ActualCost          float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost         float64 `json:"account_cost"` // 账号成本
 }
 
 // EndpointStat represents usage statistics for a single request endpoint.
@@ -90,14 +115,22 @@ type EndpointStat struct {
 	ActualCost  float64 `json:"actual_cost"` // 实际扣除
 }
 
+// GroupUsageSummary represents today's and cumulative cost for a single group.
+type GroupUsageSummary struct {
+	GroupID   int64   `json:"group_id"`
+	TodayCost float64 `json:"today_cost"`
+	TotalCost float64 `json:"total_cost"`
+}
+
 // GroupStat represents usage statistics for a single group
 type GroupStat struct {
 	GroupID     int64   `json:"group_id"`
 	GroupName   string  `json:"group_name"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`        // 标准计费
-	ActualCost  float64 `json:"actual_cost"` // 实际扣除
+	Cost        float64 `json:"cost"`         // 标准计费
+	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost float64 `json:"account_cost"` // 账号成本
 }
 
 // UserUsageTrendPoint represents user usage trend data point
@@ -125,6 +158,35 @@ type UserSpendingRankingItem struct {
 type UserSpendingRankingResponse struct {
 	Ranking         []UserSpendingRankingItem `json:"ranking"`
 	TotalActualCost float64                   `json:"total_actual_cost"`
+	TotalRequests   int64                     `json:"total_requests"`
+	TotalTokens     int64                     `json:"total_tokens"`
+}
+
+// UserBreakdownItem represents per-user usage breakdown within a dimension (group, model, endpoint).
+type UserBreakdownItem struct {
+	UserID      int64   `json:"user_id"`
+	Email       string  `json:"email"`
+	Requests    int64   `json:"requests"`
+	TotalTokens int64   `json:"total_tokens"`
+	Cost        float64 `json:"cost"`         // 标准计费
+	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost float64 `json:"account_cost"` // 账号成本
+}
+
+// UserBreakdownDimension specifies the dimension to filter for user breakdown.
+type UserBreakdownDimension struct {
+	GroupID      int64  // filter by group_id (>0 to enable)
+	Model        string // filter by model name (non-empty to enable)
+	ModelType    string // "requested", "upstream", or "mapping"
+	Endpoint     string // filter by endpoint value (non-empty to enable)
+	EndpointType string // "inbound", "upstream", or "path"
+	// Additional filter conditions
+	UserID      int64  // filter by user_id (>0 to enable)
+	APIKeyID    int64  // filter by api_key_id (>0 to enable)
+	AccountID   int64  // filter by account_id (>0 to enable)
+	RequestType *int16 // filter by request_type (non-nil to enable)
+	Stream      *bool  // filter by stream flag (non-nil to enable)
+	BillingType *int8  // filter by billing_type (non-nil to enable)
 }
 
 // APIKeyUsageTrendPoint represents API key usage trend data point
@@ -180,6 +242,7 @@ type UsageLogFilters struct {
 	RequestType *int16
 	Stream      *bool
 	BillingType *int8
+	BillingMode string
 	StartTime   *time.Time
 	EndTime     *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
